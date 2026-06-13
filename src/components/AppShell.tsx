@@ -43,9 +43,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     router.replace("/login");
   }
 
-  const nav = [
+  const navProducts = [
     { label: "Loan products", href: "/loan-products" },
     { label: "Create product", href: "/loan-products/new" },
+  ];
+  const navTools = [
+    { label: "Repayment simulator", href: "/simulator" },
   ];
 
   const breadcrumb = pathname.split("/").filter(Boolean);
@@ -60,7 +63,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         <nav className="nav">
           <div className="nav-section">Loan products</div>
-          {nav.map((n) => (
+          {navProducts.map((n) => (
+            <Link
+              key={n.href}
+              href={n.href}
+              className={pathname === n.href ? "active" : ""}
+            >
+              {n.label}
+            </Link>
+          ))}
+          <div className="nav-section">Tools</div>
+          {navTools.map((n) => (
             <Link
               key={n.href}
               href={n.href}
