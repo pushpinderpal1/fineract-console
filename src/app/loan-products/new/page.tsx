@@ -20,9 +20,9 @@ type Form = {
   interestType: number;
   interestCalculationPeriodType: number;
   transactionProcessingStrategyCode: string;
-  accountingRule: number;
   daysInYearType: number;
   daysInMonthType: number;
+  isInterestRecalculationEnabled: boolean;
 };
 
 const initial: Form = {
@@ -40,10 +40,15 @@ const initial: Form = {
   interestType: 0,
   interestCalculationPeriodType: 1,
   transactionProcessingStrategyCode: "mifos-standard-strategy",
-  accountingRule: 1,
   daysInYearType: 365,
   daysInMonthType: 30,
+  isInterestRecalculationEnabled: false,
 };
+
+// accountingRule = 1 (None) is forced for sandbox use.
+// Setting it to 2/3/4 would require mapping 12+ GL account IDs from a
+// chart of accounts the sandbox doesn't have configured.
+const ACCOUNTING_RULE_NONE = 1;
 
 export default function NewLoanProductPage() {
   const router = useRouter();
@@ -62,7 +67,12 @@ export default function NewLoanProductPage() {
     setErr(null);
     setSuccess(null);
 
-    const body = { ...f, locale: "en", dateFormat: "dd MMMM yyyy" };
+    const body = {
+      ...f,
+      accountingRule: ACCOUNTING_RULE_NONE,
+      locale: "en",
+      dateFormat: "dd MMMM yyyy",
+    };
 
     try {
       const data = await fineract<{ resourceId: number }>({
@@ -85,7 +95,7 @@ export default function NewLoanProductPage() {
           <div className="page-eyebrow">POST /loanproducts</div>
           <h1 className="page-title">New loan product</h1>
           <p className="page-sub">
-            Defines the template — currency, principal range, schedule, interest, accounting — applied to every loan originated from it.
+            Defines the template — currency, principal range, schedule, interest — applied to every loan originated from it.
           </p>
         </div>
       </header>
@@ -198,6 +208,11 @@ export default function NewLoanProductPage() {
             <SelectField label="Calc period" code="interestCalculationPeriodType" value={f.interestCalculationPeriodType}
               onChange={(v) => update("interestCalculationPeriodType", v)}
               options={[ [0, "Daily"], [1, "Same as repayment period"] ]} />
+            <SelectField label="Interest recalc" code="isInterestRecalculationEnabled"
+              value={f.isInterestRecalculationEnabled ? "true" : "false"}
+              onChange={(v) => update("isInterestRecalculationEnabled", v === "true")}
+              options={[ ["false", "Disabled"], ["true", "Enabled"] ]}
+              hint="Sandbox uses disabled; enabling requires extra schedule config." />
           </div>
         </section>
 
@@ -219,11 +234,19 @@ export default function NewLoanProductPage() {
                 ["interest-principal-penalties-fees-order-strategy", "Interest · Principal · Penalties · Fees"],
                 ["early-repayment-strategy", "Early repayment"],
               ]} />
-            <SelectField label="Accounting" code="accountingRule" value={f.accountingRule}
-              onChange={(v) => update("accountingRule", v)}
-              options={[
-                [1, "None"], [2, "Cash"], [3, "Accrual (periodic)"], [4, "Accrual (upfront)"],
-              ]} hint="Start with None for sandbox." />
+
+            <div className="field">
+              <label className="field-label">
+                Accounting
+                <span className="field-label-code">accountingRule</span>
+              </label>
+              <input value="None (no GL mapping)" disabled
+                style={{ background: "var(--rule-soft)", color: "var(--ink-soft)", cursor: "not-allowed" }} />
+              <div className="field-hint">
+                Cash / Accrual modes require ~12 chart-of-accounts mappings (fund source, portfolio, interest, fees, write-off, etc.). Sandbox uses None.
+              </div>
+            </div>
+
             <SelectField label="Days in year" code="daysInYearType" value={f.daysInYearType}
               onChange={(v) => update("daysInYearType", v)}
               options={[ [360, "360"], [364, "364"], [365, "365"] ]} />
@@ -315,7 +338,6 @@ function SelectField<V extends string | number>(p: {
         value={String(p.value)}
         onChange={(e) => {
           const raw = e.target.value;
-          // Preserve original type (number vs string) based on the option list
           const sample = p.options[0][0];
           const next = (typeof sample === "number" ? Number(raw) : raw) as V;
           p.onChange(next);
