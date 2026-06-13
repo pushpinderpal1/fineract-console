@@ -25,14 +25,14 @@ export default function LoginPage() {
 
     const tentative: Session = { username, base64Encoded, authenticated: false };
 
-    try {
-      // POST /authentication?username=...&password=... — Fineract's classic auth check.
+try {
+      // POST /authentication with JSON body — modern Fineract (post FINERACT-726)
       await fineract({
         method: "POST",
-        path: `/authentication?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
+        path: `/authentication`,
+        body: { username, password },
         session: tentative,
       });
-
       setSession({ ...tentative, authenticated: true });
       router.replace("/loan-products");
     } catch (e) {
