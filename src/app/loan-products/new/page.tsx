@@ -6,53 +6,111 @@ import { AppShell } from "@/components/AppShell";
 import { fineract, formatError } from "@/lib/fineract";
 
 type Form = {
+  // Identity
   name: string;
   shortName: string;
+  description: string;
+  externalId: string;
+  startDate: string;        // dd MMMM yyyy or empty
+  closeDate: string;        // dd MMMM yyyy or empty
+
+  // Currency
   currencyCode: string;
   digitsAfterDecimal: number;
+
+  // Schedule
   principal: number;
+  minPrincipal: number | null;
+  maxPrincipal: number | null;
   numberOfRepayments: number;
+  minNumberOfRepayments: number | null;
+  maxNumberOfRepayments: number | null;
   repaymentEvery: number;
   repaymentFrequencyType: number;
+
+  // Interest
   interestRatePerPeriod: number;
+  minInterestRatePerPeriod: number | null;
+  maxInterestRatePerPeriod: number | null;
   interestRateFrequencyType: number;
   amortizationType: number;
   interestType: number;
   interestCalculationPeriodType: number;
+  isInterestRecalculationEnabled: boolean;
+
+  // Grace & tolerance (optional)
+  graceOnPrincipalPayment: number | null;
+  graceOnInterestPayment: number | null;
+  graceOnArrearsAgeing: number | null;
+  inArrearsTolerance: number | null;
+  graceOnInterestCharged: number | null;
+
+  // Processing
   transactionProcessingStrategyCode: string;
   daysInYearType: number;
   daysInMonthType: number;
-  isInterestRecalculationEnabled: boolean;
+  minimumDaysBetweenDisbursalAndFirstRepayment: number | null;
+  allowPartialPeriodInterestCalculation: boolean;
+  canDefineInstallmentAmount: boolean;
+  multiDisburseLoan: boolean;
+  maxTrancheCount: number | null;
+  outstandingLoanBalance: number | null;
 };
 
 const initial: Form = {
   name: "Standard Microloan",
   shortName: "SML1",
+  description: "",
+  externalId: "",
+  startDate: "",
+  closeDate: "",
+
   currencyCode: "USD",
   digitsAfterDecimal: 2,
+
   principal: 10000,
+  minPrincipal: null,
+  maxPrincipal: null,
   numberOfRepayments: 12,
+  minNumberOfRepayments: null,
+  maxNumberOfRepayments: null,
   repaymentEvery: 1,
   repaymentFrequencyType: 2,
+
   interestRatePerPeriod: 18,
+  minInterestRatePerPeriod: null,
+  maxInterestRatePerPeriod: null,
   interestRateFrequencyType: 3,
   amortizationType: 1,
   interestType: 0,
   interestCalculationPeriodType: 1,
+  isInterestRecalculationEnabled: false,
+
+  graceOnPrincipalPayment: null,
+  graceOnInterestPayment: null,
+  graceOnArrearsAgeing: null,
+  inArrearsTolerance: null,
+  graceOnInterestCharged: null,
+
   transactionProcessingStrategyCode: "mifos-standard-strategy",
   daysInYearType: 365,
   daysInMonthType: 30,
-  isInterestRecalculationEnabled: false,
+  minimumDaysBetweenDisbursalAndFirstRepayment: null,
+  allowPartialPeriodInterestCalculation: false,
+  canDefineInstallmentAmount: false,
+  multiDisburseLoan: false,
+  maxTrancheCount: null,
+  outstandingLoanBalance: null,
 };
 
-// accountingRule = 1 (None) is forced for sandbox use.
-// Setting it to 2/3/4 would require mapping 12+ GL account IDs from a
-// chart of accounts the sandbox doesn't have configured.
+// accountingRule = 1 (None) is forced; Cash/Accrual modes need GL mapping
+// from a chart of accounts that isn't configured in this sandbox.
 const ACCOUNTING_RULE_NONE = 1;
 
 export default function NewLoanProductPage() {
   const router = useRouter();
   const [f, setF] = useState<Form>(initial);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<{ resourceId: number } | null>(null);
   const [err, setErr] = useState<{ title: string; detail: string; raw?: string } | null>(null);
@@ -61,24 +119,88 @@ export default function NewLoanProductPage() {
     setF((prev) => ({ ...prev, [k]: v }));
   }
 
+  /**
+   * Build the request body. Strips null/empty optional fields so Fineract
+   * doesn't see them at all — sending null on these often produces "must be
+   * one of ..." errors. We send the field only when the user set a value.
+   */
+  function buildBody(): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      // Required core
+      name: f.name,
+      shortName: f.shortName,
+      currencyCode: f.currencyCode,
+      digitsAfterDecimal: f.digitsAfterDecimal,
+      principal: f.principal,
+      numberOfRepayments: f.numberOfRepayments,
+      repaymentEvery: f.repaymentEvery,
+      repaymentFrequencyType: f.repaymentFrequencyType,
+      interestRatePerPeriod: f.interestRatePerPeriod,
+      interestRateFrequencyType: f.interestRateFrequencyType,
+      amortizationType: f.amortizationType,
+      interestType: f.interestType,
+      interestCalculationPeriodType: f.interestCalculationPeriodType,
+      isInterestRecalculationEnabled: f.isInterestRecalculationEnabled,
+      transactionProcessingStrategyCode: f.transactionProcessingStrategyCode,
+      daysInYearType: f.daysInYearType,
+      daysInMonthType: f.daysInMonthType,
+      accountingRule: ACCOUNTING_RULE_NONE,
+      locale: "en",
+      dateFormat: "dd MMMM yyyy",
+    };
+
+    // Optional strings — only include if non-empty
+    if (f.description.trim()) body.description = f.description.trim();
+    if (f.externalId.trim()) body.externalId = f.externalId.trim();
+    if (f.startDate.trim()) body.startDate = f.startDate.trim();
+    if (f.closeDate.trim()) body.closeDate = f.closeDate.trim();
+
+    // Optional numbers — only include if user set a value
+    const optionalNumbers: Array<keyof Form> = [
+      "minPrincipal", "maxPrincipal",
+      "minNumberOfRepayments", "maxNumberOfRepayments",
+      "minInterestRatePerPeriod", "maxInterestRatePerPeriod",
+      "graceOnPrincipalPayment", "graceOnInterestPayment",
+      "graceOnArrearsAgeing", "inArrearsTolerance", "graceOnInterestCharged",
+      "minimumDaysBetweenDisbursalAndFirstRepayment",
+      "maxTrancheCount", "outstandingLoanBalance",
+    ];
+    for (const key of optionalNumbers) {
+      const v = f[key];
+      if (v !== null && v !== undefined && !Number.isNaN(v)) body[key] = v;
+    }
+
+    // Booleans that have functional defaults — only include when true,
+    // since some Fineract versions reject explicit `false` on these.
+    if (f.allowPartialPeriodInterestCalculation) {
+      body.allowPartialPeriodInterestCalculation = true;
+    }
+    if (f.canDefineInstallmentAmount) {
+      body.canDefineInstallmentAmount = true;
+    }
+    if (f.multiDisburseLoan) {
+      body.multiDisburseLoan = true;
+      // When multi-disburse is on, maxTrancheCount and outstandingLoanBalance
+      // become required. We send what the user gave; defaults of 2 and the
+      // principal are reasonable if they didn't.
+      if (body.maxTrancheCount === undefined) body.maxTrancheCount = 2;
+      if (body.outstandingLoanBalance === undefined) body.outstandingLoanBalance = f.principal;
+    }
+
+    return body;
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
     setErr(null);
     setSuccess(null);
 
-    const body = {
-      ...f,
-      accountingRule: ACCOUNTING_RULE_NONE,
-      locale: "en",
-      dateFormat: "dd MMMM yyyy",
-    };
-
     try {
       const data = await fineract<{ resourceId: number }>({
         method: "POST",
         path: "/loanproducts",
-        body,
+        body: buildBody(),
       });
       setSuccess({ resourceId: data.resourceId });
     } catch (e) {
@@ -150,6 +272,23 @@ export default function NewLoanProductPage() {
               onChange={(v) => update("shortName", v)} required maxLength={4}
               hint="≤ 4 characters, unique." />
           </div>
+
+          {showAdvanced && (
+            <div className="field-grid" style={{ marginTop: 24 }}>
+              <TextAreaField label="Description" code="description" value={f.description}
+                onChange={(v) => update("description", v)}
+                hint="Internal notes about this product's purpose or terms." />
+              <TextField label="External ID" code="externalId" value={f.externalId}
+                onChange={(v) => update("externalId", v)}
+                hint="Optional reference code for integrations." />
+              <TextField label="Start date" code="startDate" value={f.startDate}
+                onChange={(v) => update("startDate", v)}
+                hint="dd MMMM yyyy (e.g. 01 January 2026). Product unavailable before this." />
+              <TextField label="Close date" code="closeDate" value={f.closeDate}
+                onChange={(v) => update("closeDate", v)}
+                hint="dd MMMM yyyy. Product retired after this date." />
+            </div>
+          )}
         </section>
 
         {/* === Currency === */}
@@ -166,7 +305,7 @@ export default function NewLoanProductPage() {
           </div>
         </section>
 
-        {/* === Principal & schedule === */}
+        {/* === Schedule === */}
         <section className="field-group">
           <div>
             <div className="field-group-title">Schedule</div>
@@ -181,10 +320,25 @@ export default function NewLoanProductPage() {
               onChange={(v) => update("repaymentEvery", v)} min={1} hint="e.g. 1 with 'months' = monthly." />
             <SelectField label="Frequency" code="repaymentFrequencyType" value={f.repaymentFrequencyType}
               onChange={(v) => update("repaymentFrequencyType", v)}
-              options={[
-                [0, "Days"], [1, "Weeks"], [2, "Months"],
-              ]} />
+              options={[ [0, "Days"], [1, "Weeks"], [2, "Months"] ]} />
           </div>
+
+          {showAdvanced && (
+            <div className="field-grid" style={{ marginTop: 24 }}>
+              <NullableNumField label="Min principal" code="minPrincipal" value={f.minPrincipal}
+                onChange={(v) => update("minPrincipal", v)}
+                hint="Minimum the loan officer can disburse. Blank = no minimum." />
+              <NullableNumField label="Max principal" code="maxPrincipal" value={f.maxPrincipal}
+                onChange={(v) => update("maxPrincipal", v)}
+                hint="Maximum the loan officer can disburse. Blank = no maximum." />
+              <NullableNumField label="Min repayments" code="minNumberOfRepayments" value={f.minNumberOfRepayments}
+                onChange={(v) => update("minNumberOfRepayments", v)}
+                hint="Minimum installments allowed at origination." />
+              <NullableNumField label="Max repayments" code="maxNumberOfRepayments" value={f.maxNumberOfRepayments}
+                onChange={(v) => update("maxNumberOfRepayments", v)}
+                hint="Maximum installments allowed at origination." />
+            </div>
+          )}
         </section>
 
         {/* === Interest === */}
@@ -195,8 +349,10 @@ export default function NewLoanProductPage() {
           </div>
           <div className="field-grid">
             <NumField label="Rate" code="interestRatePerPeriod" value={f.interestRatePerPeriod}
-              onChange={(v) => update("interestRatePerPeriod", v)} step="0.01" hint="Percent, in the chosen frequency." />
-            <SelectField label="Rate frequency" code="interestRateFrequencyType" value={f.interestRateFrequencyType}
+              onChange={(v) => update("interestRatePerPeriod", v)} step="0.01"
+              hint="Percent, in the chosen frequency." />
+            <SelectField label="Rate frequency" code="interestRateFrequencyType"
+              value={f.interestRateFrequencyType}
               onChange={(v) => update("interestRateFrequencyType", v)}
               options={[ [2, "Per month"], [3, "Per year"] ]} />
             <SelectField label="Amortization" code="amortizationType" value={f.amortizationType}
@@ -205,25 +361,58 @@ export default function NewLoanProductPage() {
             <SelectField label="Interest method" code="interestType" value={f.interestType}
               onChange={(v) => update("interestType", v)}
               options={[ [0, "Declining balance"], [1, "Flat"] ]} />
-            <SelectField label="Calc period" code="interestCalculationPeriodType" value={f.interestCalculationPeriodType}
+            <SelectField label="Calc period" code="interestCalculationPeriodType"
+              value={f.interestCalculationPeriodType}
               onChange={(v) => update("interestCalculationPeriodType", v)}
               options={[ [0, "Daily"], [1, "Same as repayment period"] ]} />
             <SelectField label="Interest recalc" code="isInterestRecalculationEnabled"
               value={f.isInterestRecalculationEnabled ? "true" : "false"}
               onChange={(v) => update("isInterestRecalculationEnabled", v === "true")}
               options={[ ["false", "Disabled"], ["true", "Enabled"] ]}
-              hint="Sandbox uses disabled; enabling requires extra schedule config." />
+              hint="Sandbox uses disabled." />
           </div>
+
+          {showAdvanced && (
+            <div className="field-grid" style={{ marginTop: 24 }}>
+              <NullableNumField label="Min rate" code="minInterestRatePerPeriod" value={f.minInterestRatePerPeriod}
+                onChange={(v) => update("minInterestRatePerPeriod", v)} step="0.01"
+                hint="Minimum rate a loan officer can apply." />
+              <NullableNumField label="Max rate" code="maxInterestRatePerPeriod" value={f.maxInterestRatePerPeriod}
+                onChange={(v) => update("maxInterestRatePerPeriod", v)} step="0.01"
+                hint="Maximum rate a loan officer can apply." />
+              <NullableNumField label="Grace on principal" code="graceOnPrincipalPayment"
+                value={f.graceOnPrincipalPayment}
+                onChange={(v) => update("graceOnPrincipalPayment", v)}
+                hint="Installments where no principal is collected." />
+              <NullableNumField label="Grace on interest" code="graceOnInterestPayment"
+                value={f.graceOnInterestPayment}
+                onChange={(v) => update("graceOnInterestPayment", v)}
+                hint="Installments where no interest is collected." />
+              <NullableNumField label="Interest-free moratorium" code="graceOnInterestCharged"
+                value={f.graceOnInterestCharged}
+                onChange={(v) => update("graceOnInterestCharged", v)}
+                hint="Installments where interest doesn't accrue at all." />
+              <NullableNumField label="Arrears tolerance" code="inArrearsTolerance"
+                value={f.inArrearsTolerance}
+                onChange={(v) => update("inArrearsTolerance", v)}
+                hint="Amount under which arrears is not flagged." />
+              <NullableNumField label="Days before arrears flag" code="graceOnArrearsAgeing"
+                value={f.graceOnArrearsAgeing}
+                onChange={(v) => update("graceOnArrearsAgeing", v)}
+                hint="Days overdue before a loan is flagged as in arrears." />
+            </div>
+          )}
         </section>
 
-        {/* === Processing & accounting === */}
+        {/* === Processing === */}
         <section className="field-group">
           <div>
             <div className="field-group-title">Processing</div>
             <div className="field-group-hint">How payments allocate and where they post.</div>
           </div>
           <div className="field-grid">
-            <SelectField label="Repayment strategy" code="transactionProcessingStrategyCode" value={f.transactionProcessingStrategyCode}
+            <SelectField label="Repayment strategy" code="transactionProcessingStrategyCode"
+              value={f.transactionProcessingStrategyCode}
               onChange={(v) => update("transactionProcessingStrategyCode", v)}
               options={[
                 ["mifos-standard-strategy", "Mifos standard"],
@@ -243,7 +432,7 @@ export default function NewLoanProductPage() {
               <input value="None (no GL mapping)" disabled
                 style={{ background: "var(--rule-soft)", color: "var(--ink-soft)", cursor: "not-allowed" }} />
               <div className="field-hint">
-                Cash / Accrual modes require ~12 chart-of-accounts mappings (fund source, portfolio, interest, fees, write-off, etc.). Sandbox uses None.
+                Cash / Accrual modes require ~12 chart-of-accounts mappings. Sandbox uses None.
               </div>
             </div>
 
@@ -254,6 +443,80 @@ export default function NewLoanProductPage() {
               onChange={(v) => update("daysInMonthType", v)}
               options={[ [1, "Actual"], [30, "30"] ]} />
           </div>
+
+          {showAdvanced && (
+            <div className="field-grid" style={{ marginTop: 24 }}>
+              <NullableNumField label="Min days disburse → 1st repay"
+                code="minimumDaysBetweenDisbursalAndFirstRepayment"
+                value={f.minimumDaysBetweenDisbursalAndFirstRepayment}
+                onChange={(v) => update("minimumDaysBetweenDisbursalAndFirstRepayment", v)}
+                hint="Minimum gap from disbursement to first installment due date." />
+
+              <SelectField label="Partial-period interest" code="allowPartialPeriodInterestCalculation"
+                value={f.allowPartialPeriodInterestCalculation ? "true" : "false"}
+                onChange={(v) => update("allowPartialPeriodInterestCalculation", v === "true")}
+                options={[ ["false", "Whole-period only"], ["true", "Pro-rate partial periods"] ]}
+                hint="How interest accrues for incomplete first/last periods." />
+
+              <SelectField label="Custom installment amount" code="canDefineInstallmentAmount"
+                value={f.canDefineInstallmentAmount ? "true" : "false"}
+                onChange={(v) => update("canDefineInstallmentAmount", v === "true")}
+                options={[ ["false", "Schedule-derived"], ["true", "Loan officer can override"] ]}
+                hint="Whether the loan officer can set a fixed EMI manually." />
+
+              <SelectField label="Multi-disburse / tranche" code="multiDisburseLoan"
+                value={f.multiDisburseLoan ? "true" : "false"}
+                onChange={(v) => update("multiDisburseLoan", v === "true")}
+                options={[ ["false", "Single disbursement"], ["true", "Tranche disbursement"] ]}
+                hint="Disburse the loan in multiple parts over time." />
+
+              {f.multiDisburseLoan && (
+                <>
+                  <NullableNumField label="Max tranches" code="maxTrancheCount" value={f.maxTrancheCount}
+                    onChange={(v) => update("maxTrancheCount", v)} min={2}
+                    hint="Required when multi-disburse is on. Default 2." />
+                  <NullableNumField label="Max outstanding balance" code="outstandingLoanBalance"
+                    value={f.outstandingLoanBalance}
+                    onChange={(v) => update("outstandingLoanBalance", v)}
+                    hint="Max combined outstanding across tranches. Default = principal." />
+                </>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* === Advanced toggle === */}
+        <section style={{
+          padding: "16px 0",
+          borderTop: "1px solid var(--rule)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}>
+          <div>
+            <div style={{
+              fontFamily: "var(--font-display)",
+              fontSize: 11,
+              letterSpacing: "0.15em",
+              textTransform: "uppercase",
+              color: "var(--ink-soft)",
+              marginBottom: 4,
+            }}>
+              Advanced settings
+            </div>
+            <div style={{ fontSize: 12, color: "var(--ink-faint)" }}>
+              {showAdvanced
+                ? "Showing optional fields: limits, grace periods, tranches, etc."
+                : "Hidden — defaults are fine for most products."}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => setShowAdvanced((s) => !s)}
+          >
+            {showAdvanced ? "Hide" : "Show"}
+          </button>
         </section>
 
         <div className="actions">
@@ -298,6 +561,38 @@ function TextField(p: {
   );
 }
 
+function TextAreaField(p: {
+  label: string; code: string; value: string;
+  onChange: (v: string) => void;
+  hint?: string;
+}) {
+  return (
+    <div className="field" style={{ gridColumn: "1 / -1" }}>
+      <label className="field-label">
+        {p.label}
+        <span className="field-label-code">{p.code}</span>
+      </label>
+      <textarea
+        value={p.value}
+        onChange={(e) => p.onChange(e.target.value)}
+        rows={3}
+        style={{
+          fontFamily: "var(--font-body)",
+          fontSize: 14,
+          padding: "8px 12px",
+          border: "1px solid var(--rule)",
+          background: "white",
+          color: "var(--ink)",
+          borderRadius: 0,
+          width: "100%",
+          resize: "vertical",
+        }}
+      />
+      {p.hint && <div className="field-hint">{p.hint}</div>}
+    </div>
+  );
+}
+
 function NumField(p: {
   label: string; code: string; value: number;
   onChange: (v: number) => void;
@@ -316,6 +611,39 @@ function NumField(p: {
         min={p.min}
         max={p.max}
         step={p.step}
+      />
+      {p.hint && <div className="field-hint">{p.hint}</div>}
+    </div>
+  );
+}
+
+/**
+ * Nullable number — empty string in the input means "don't send this field".
+ * Allows users to leave optional fields truly blank rather than forcing 0.
+ */
+function NullableNumField(p: {
+  label: string; code: string; value: number | null;
+  onChange: (v: number | null) => void;
+  min?: number; max?: number; step?: string; hint?: string;
+}) {
+  return (
+    <div className="field">
+      <label className="field-label">
+        {p.label}
+        <span className="field-label-code">{p.code}</span>
+      </label>
+      <input
+        type="number"
+        value={p.value ?? ""}
+        onChange={(e) => {
+          const raw = e.target.value;
+          if (raw === "") p.onChange(null);
+          else p.onChange(Number(raw));
+        }}
+        min={p.min}
+        max={p.max}
+        step={p.step}
+        placeholder="—"
       />
       {p.hint && <div className="field-hint">{p.hint}</div>}
     </div>
