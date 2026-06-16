@@ -47,6 +47,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     { label: "Clients", href: "/clients" },
     { label: "Loans", href: "/loans" },
   ];
+  const navDeposits = [
+    { label: "Savings accounts", href: "/savings-accounts" },
+    { label: "Savings products", href: "/savings-products" },
+  ];
   const navProducts = [
     { label: "Loan products", href: "/loan-products" },
     { label: "Create product", href: "/loan-products/new" },
@@ -68,6 +72,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <nav className="nav">
           <div className="nav-section">Lending</div>
           {navLending.map((n) => (
+            <Link
+              key={n.href}
+              href={n.href}
+              className={pathname === n.href || pathname.startsWith(n.href + "/") ? "active" : ""}
+            >
+              {n.label}
+            </Link>
+          ))}
+          <div className="nav-section">Deposits</div>
+          {navDeposits.map((n) => (
             <Link
               key={n.href}
               href={n.href}

@@ -10,6 +10,7 @@ import { fmtFineractArray, todayIso, toFineractDate } from "@/lib/dates";
 type LoanDetail = {
   id: number;
   accountNo: string;
+  externalId?: string;
   status?: { id?: number; code?: string; value?: string };
   clientId?: number;
   clientName?: string;
@@ -137,6 +138,26 @@ export default function LoanDetailPage() {
 
       {loan && (
         <>
+          {/* Collateral linkage banner */}
+          {loan.externalId?.startsWith("collateral:savings:") && (
+            <div className="alert" style={{
+              borderLeftColor: "var(--signal)",
+              background: "rgba(232, 184, 60, 0.08)",
+              marginBottom: 24,
+            }}>
+              <div className="alert-label" style={{ color: "var(--signal-hover)" }}>
+                Secured loan
+              </div>
+              <div>
+                This loan is secured by{" "}
+                <Link href={`/savings-accounts/${loan.externalId.split(":")[2]}`}>
+                  savings account #{loan.externalId.split(":")[2]}
+                </Link>
+                {" "}as collateral.
+              </div>
+            </div>
+          )}
+
           {/* Summary cards */}
           <div style={{
             display: "grid",

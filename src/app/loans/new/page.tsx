@@ -23,6 +23,13 @@ type Product = {
   transactionProcessingStrategyCode?: string;
 };
 type Staff = { id: number; displayName: string };
+type ClientSavingsAccount = {
+  id: number;
+  accountNo: string;
+  productName?: string;
+  status?: { id?: number; value?: string };
+  accountBalance?: number;
+};
 
 type Form = {
   clientId: string;
@@ -38,6 +45,7 @@ type Form = {
   interestCalculationPeriodType: number;
   transactionProcessingStrategyCode: string;
   loanOfficerId: string;          // "" = none
+  collateralSavingsId: string;    // "" = no collateral
   submittedOnDate: string;        // yyyy-MM-dd
   expectedDisbursementDate: string;
 };
@@ -56,6 +64,7 @@ const initial: Form = {
   interestCalculationPeriodType: 1,
   transactionProcessingStrategyCode: "mifos-standard-strategy",
   loanOfficerId: "",
+  collateralSavingsId: "",
   submittedOnDate: todayIso(),
   expectedDisbursementDate: offsetDaysIso(1),  // tomorrow, must be ≥ submittedOnDate
 };
@@ -77,6 +86,7 @@ function NewLoanInner() {
   const [clients, setClients] = useState<Client[] | null>(null);
   const [products, setProducts] = useState<Product[] | null>(null);
   const [staff, setStaff] = useState<Staff[] | null>(null);
+  const [clientSavings, setClientSavings] = useState<ClientSavingsAccount[] | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<{ loanId: number } | null>(null);
   const [err, setErr] = useState<{ title: string; detail: string; raw?: string } | null>(null);
@@ -109,6 +119,35 @@ function NewLoanInner() {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // When the client changes, load their savings accounts (for the collateral picker).
+  useEffect(() => {
+    if (!f.clientId) {
+      setClientSavings(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const a = await fineract<{ savingsAccounts?: ClientSavingsAccount[] }>({
+          method: "GET",
+          path: `/clients/${f.clientId}/accounts`,
+        });
+        if (!cancelled) {
+          // Only show active savings accounts with positive balance — those are
+          // the only ones meaningfully usable as collateral.
+          const all = a.savingsAccounts ?? [];
+          const usable = all.filter((s) =>
+            s.status?.id === 300 && (s.accountBalance ?? 0) > 0
+          );
+          setClientSavings(usable);
+        }
+      } catch {
+        if (!cancelled) setClientSavings([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [f.clientId]);
 
   // When a product is picked, fetch its details and prefill scheduling fields.
   async function onProductSelect(idStr: string) {
@@ -158,6 +197,16 @@ function NewLoanInner() {
       dateFormat: "dd MMMM yyyy",
     };
     if (f.loanOfficerId) body.loanOfficerId = Number(f.loanOfficerId);
+
+    // Collateral linkage: we tag the loan with a reference to the savings
+    // account it's secured by. In a production setup this would use Fineract's
+    // proper collateral API (/clients/{id}/collaterals + collateral array on
+    // the loan); the externalId tag is a demo-grade shortcut that keeps the
+    // linkage visible without setting up the full collateral entity chain.
+    if (f.collateralSavingsId) {
+      body.externalId = `collateral:savings:${f.collateralSavingsId}`;
+    }
+
     return body;
   }
 
@@ -315,6 +364,45 @@ function NewLoanInner() {
                   <option key={s.id} value={String(s.id)}>{s.displayName}</option>
                 ))}
               </select>
+            </div>
+          </div>
+        </section>
+
+        {/* === Collateral === */}
+        <section className="field-group">
+          <div>
+            <div className="field-group-title">Collateral</div>
+            <div className="field-group-hint">
+              Optional. Link this loan to one of the client&apos;s savings accounts as security.
+            </div>
+          </div>
+          <div className="field-grid">
+            <div className="field">
+              <label className="field-label">
+                Secured by savings
+                <span className="field-label-code">collateralSavingsId (optional)</span>
+              </label>
+              <select
+                value={f.collateralSavingsId}
+                onChange={(e) => update("collateralSavingsId", e.target.value)}
+                disabled={!f.clientId}
+              >
+                <option value="">
+                  {!f.clientId
+                    ? "Pick a client first"
+                    : clientSavings === null
+                      ? "Loading…"
+                      : "— No collateral —"}
+                </option>
+                {clientSavings?.map((s) => (
+                  <option key={s.id} value={String(s.id)}>
+                    {s.accountNo} · {s.productName} · bal {s.accountBalance?.toLocaleString()}
+                  </option>
+                ))}
+              </select>
+              <div className="field-hint">
+                Only the client&apos;s active savings accounts with a positive balance appear here.
+              </div>
             </div>
           </div>
         </section>

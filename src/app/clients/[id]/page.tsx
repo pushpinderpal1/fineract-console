@@ -33,6 +33,15 @@ type LoanRow = {
 
 type ClientAccounts = {
   loanAccounts?: LoanRow[];
+  savingsAccounts?: SavingsRow[];
+};
+
+type SavingsRow = {
+  id: number;
+  accountNo: string;
+  status?: { value?: string };
+  productName?: string;
+  accountBalance?: number;
 };
 
 export default function ClientDetailPage() {
@@ -106,6 +115,62 @@ export default function ClientDetailPage() {
         </div>
       )}
 
+      {/* Savings accounts */}
+      <div className="table-card" style={{ marginBottom: 24 }}>
+        <div className="table-head">
+          <span>Savings accounts</span>
+          <span>{accounts?.savingsAccounts?.length ?? 0} accounts</span>
+        </div>
+        {!accounts ? (
+          <div className="empty-state">
+            <div className="empty-state-eyebrow">Loading</div>
+          </div>
+        ) : !accounts.savingsAccounts || accounts.savingsAccounts.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-state-eyebrow">No savings accounts</div>
+            <p style={{ marginBottom: 16 }}>
+              Open a deposit account for this client.
+              Funded savings accounts can secure a loan as collateral.
+            </p>
+            <Link
+              href={`/savings-accounts/new?clientId=${id}`}
+              className="btn btn-primary"
+              style={{ textDecoration: "none" }}
+            >
+              Open savings account
+            </Link>
+          </div>
+        ) : (
+          <table className="data">
+            <thead>
+              <tr>
+                <th style={{ width: 60 }}>ID</th>
+                <th>Account #</th>
+                <th>Product</th>
+                <th>Status</th>
+                <th style={{ textAlign: "right" }}>Balance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {accounts.savingsAccounts.map((s) => (
+                <tr key={s.id}>
+                  <td className="mono">{s.id}</td>
+                  <td className="mono">
+                    <Link href={`/savings-accounts/${s.id}`}>{s.accountNo}</Link>
+                  </td>
+                  <td>{s.productName ?? "—"}</td>
+                  <td className="mono" style={{ color: "var(--ink-soft)" }}>{s.status?.value ?? "—"}</td>
+                  <td className="mono" style={{ textAlign: "right", fontWeight: 500 }}>
+                    {s.accountBalance?.toLocaleString() ?? "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Loans */}
       <div className="table-card">
         <div className="table-head">
           <span>Loans</span>
