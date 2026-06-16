@@ -139,24 +139,31 @@ export default function LoanDetailPage() {
       {loan && (
         <>
           {/* Collateral linkage banner */}
-          {loan.externalId?.startsWith("collateral:savings:") && (
-            <div className="alert" style={{
-              borderLeftColor: "var(--signal)",
-              background: "rgba(232, 184, 60, 0.08)",
-              marginBottom: 24,
-            }}>
-              <div className="alert-label" style={{ color: "var(--signal-hover)" }}>
-                Secured loan
+          {loan.externalId?.startsWith("collateral:") && (() => {
+            const parts = loan.externalId.split(":");
+            // Format: "collateral:savings:42" or "collateral:fd:7"
+            const kind = parts[1];   // "savings" or "fd"
+            const refId = parts[2];
+            const link = kind === "fd"
+              ? `/fixed-deposit-accounts/${refId}`
+              : `/savings-accounts/${refId}`;
+            const kindLabel = kind === "fd" ? "fixed deposit" : "savings account";
+            return (
+              <div className="alert" style={{
+                borderLeftColor: "var(--signal)",
+                background: "rgba(232, 184, 60, 0.08)",
+                marginBottom: 24,
+              }}>
+                <div className="alert-label" style={{ color: "var(--signal-hover)" }}>
+                  Secured loan
+                </div>
+                <div>
+                  This loan is secured by{" "}
+                  <Link href={link}>{kindLabel} #{refId}</Link> as collateral.
+                </div>
               </div>
-              <div>
-                This loan is secured by{" "}
-                <Link href={`/savings-accounts/${loan.externalId.split(":")[2]}`}>
-                  savings account #{loan.externalId.split(":")[2]}
-                </Link>
-                {" "}as collateral.
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Summary cards */}
           <div style={{

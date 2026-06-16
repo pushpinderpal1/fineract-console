@@ -50,6 +50,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const navDeposits = [
     { label: "Savings accounts", href: "/savings-accounts" },
     { label: "Savings products", href: "/savings-products" },
+    { label: "Fixed deposits", href: "/fixed-deposit-accounts" },
+    { label: "FD products", href: "/fixed-deposit-products" },
   ];
   const navProducts = [
     { label: "Loan products", href: "/loan-products" },

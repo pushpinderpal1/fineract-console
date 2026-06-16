@@ -34,6 +34,7 @@ type LoanRow = {
 type ClientAccounts = {
   loanAccounts?: LoanRow[];
   savingsAccounts?: SavingsRow[];
+  fixedDepositAccounts?: FdRow[];
 };
 
 type SavingsRow = {
@@ -42,6 +43,15 @@ type SavingsRow = {
   status?: { value?: string };
   productName?: string;
   accountBalance?: number;
+};
+
+type FdRow = {
+  id: number;
+  accountNo: string;
+  status?: { value?: string };
+  productName?: string;
+  depositAmount?: number;
+  maturityAmount?: number;
 };
 
 export default function ClientDetailPage() {
@@ -162,6 +172,64 @@ export default function ClientDetailPage() {
                   <td className="mono" style={{ color: "var(--ink-soft)" }}>{s.status?.value ?? "—"}</td>
                   <td className="mono" style={{ textAlign: "right", fontWeight: 500 }}>
                     {s.accountBalance?.toLocaleString() ?? "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Fixed deposits */}
+      <div className="table-card" style={{ marginBottom: 24 }}>
+        <div className="table-head">
+          <span>Fixed deposits</span>
+          <span>{accounts?.fixedDepositAccounts?.length ?? 0} accounts</span>
+        </div>
+        {!accounts ? (
+          <div className="empty-state">
+            <div className="empty-state-eyebrow">Loading</div>
+          </div>
+        ) : !accounts.fixedDepositAccounts || accounts.fixedDepositAccounts.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-state-eyebrow">No fixed deposits</div>
+            <p style={{ marginBottom: 16 }}>
+              Open a term deposit for this client. FDs make particularly strong loan collateral.
+            </p>
+            <Link
+              href={`/fixed-deposit-accounts/new?clientId=${id}`}
+              className="btn btn-primary"
+              style={{ textDecoration: "none" }}
+            >
+              Open fixed deposit
+            </Link>
+          </div>
+        ) : (
+          <table className="data">
+            <thead>
+              <tr>
+                <th style={{ width: 60 }}>ID</th>
+                <th>Account #</th>
+                <th>Product</th>
+                <th>Status</th>
+                <th style={{ textAlign: "right" }}>Deposit</th>
+                <th style={{ textAlign: "right" }}>At maturity</th>
+              </tr>
+            </thead>
+            <tbody>
+              {accounts.fixedDepositAccounts.map((fd) => (
+                <tr key={fd.id}>
+                  <td className="mono">{fd.id}</td>
+                  <td className="mono">
+                    <Link href={`/fixed-deposit-accounts/${fd.id}`}>{fd.accountNo}</Link>
+                  </td>
+                  <td>{fd.productName ?? "—"}</td>
+                  <td className="mono" style={{ color: "var(--ink-soft)" }}>{fd.status?.value ?? "—"}</td>
+                  <td className="mono" style={{ textAlign: "right" }}>
+                    {fd.depositAmount?.toLocaleString() ?? "—"}
+                  </td>
+                  <td className="mono" style={{ textAlign: "right", fontWeight: 500 }}>
+                    {fd.maturityAmount?.toLocaleString() ?? "—"}
                   </td>
                 </tr>
               ))}
