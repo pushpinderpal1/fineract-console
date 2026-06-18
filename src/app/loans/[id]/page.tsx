@@ -68,7 +68,7 @@ export default function LoanDetailPage() {
   const id = params.id;
   const [loan, setLoan] = useState<LoanDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<"approve" | "disburse" | "repay" | null>(null);
+  const [dialog, setDialog] = useState<"approve" | "disburse" | "repay" | "writeoff" | null>(null);
 
   const reload = useCallback(async () => {
     if (!id) return;
@@ -91,6 +91,37 @@ export default function LoanDetailPage() {
   const canApprove = statusId === STATUS.SUBMITTED;
   const canDisburse = statusId === STATUS.APPROVED;
   const canRepay = statusId === STATUS.ACTIVE;
+  const canWriteoff = statusId === STATUS.ACTIVE;
+
+  // Calculate Days Past Due. We find the earliest installment that is past
+  // its due date and not yet complete; DPD is days from that date to today.
+  // If there's no overdue installment, dpd is 0 (loan is current).
+  const dpd = (() => {
+    if (!loan?.repaymentSchedule?.periods) return 0;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const overdue = loan.repaymentSchedule.periods
+      .filter((p) => p.period && p.period > 0 && !p.complete && p.dueDate)
+      .map((p) => {
+        const [y, m, d] = p.dueDate!;
+        return new Date(y, m - 1, d);
+      })
+      .filter((d) => d < today)
+      .sort((a, b) => a.getTime() - b.getTime());
+    if (overdue.length === 0) return 0;
+    const earliest = overdue[0];
+    return Math.floor((today.getTime() - earliest.getTime()) / (1000 * 60 * 60 * 24));
+  })();
+
+  // Helper: is a given Fineract date array (yyyy,mm,dd) in the past?
+  const isPast = (dateArr: number[] | undefined): boolean => {
+    if (!dateArr || dateArr.length < 3) return false;
+    const [y, m, d] = dateArr;
+    const due = new Date(y, m - 1, d);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return due < today;
+  };
 
   return (
     <AppShell>
@@ -124,6 +155,12 @@ export default function LoanDetailPage() {
           {canRepay && (
             <button className="btn btn-primary" onClick={() => setDialog("repay")}>
               Make repayment
+            </button>
+          )}
+          {canWriteoff && (
+            <button className="btn btn-ghost" onClick={() => setDialog("writeoff")}
+              style={{ borderColor: "var(--bad)", color: "var(--bad)" }}>
+              Write off
             </button>
           )}
         </div>
@@ -165,6 +202,24 @@ export default function LoanDetailPage() {
             );
           })()}
 
+          {/* Overdue / DPD banner — appears only when loan has overdue installments */}
+          {dpd > 0 && (
+            <div className="alert" style={{
+              borderLeftColor: "var(--bad)",
+              background: "rgba(179, 54, 54, 0.06)",
+              marginBottom: 24,
+            }}>
+              <div className="alert-label" style={{ color: "var(--bad)" }}>
+                {dpd} days past due
+              </div>
+              <div>
+                This loan has overdue installments. In production, this triggers
+                collections workflow — reminders, calls, field visits.
+                Persistent default may lead to write-off.
+              </div>
+            </div>
+          )}
+
           {/* Summary cards */}
           <div style={{
             display: "grid",
@@ -178,6 +233,7 @@ export default function LoanDetailPage() {
             <Stat label="Disbursed" value={fmt(loan.summary?.principalDisbursed)} />
             <Stat label="Paid" value={fmt(loan.summary?.totalRepayment)} />
             <Stat label="Outstanding" value={fmt(loan.summary?.totalOutstanding)} accent />
+            {dpd > 0 && <Stat label="Days past due" value={String(dpd)} bad />}
             <Stat label="Submitted" value={fmtFineractArray(loan.timeline?.submittedOnDate)} />
             <Stat label="Approved" value={fmtFineractArray(loan.timeline?.approvedOnDate)} />
             <Stat label="Disbursed on" value={fmtFineractArray(loan.timeline?.actualDisbursementDate)} />
@@ -208,10 +264,31 @@ export default function LoanDetailPage() {
                       // Period 0 is the disbursement row; subsequent are installments
                       const isDisburse = !p.period || p.period === 0;
                       const paid = (p.principalPaid ?? 0) + (p.interestPaid ?? 0);
+                      const isOverdue = !isDisburse && !p.complete && isPast(p.dueDate);
+                      const rowBg = isDisburse
+                        ? "var(--rule-soft)"
+                        : isOverdue
+                          ? "rgba(179, 54, 54, 0.06)"
+                          : undefined;
+                      const stateColor = isOverdue
+                        ? "var(--bad)"
+                        : p.complete
+                          ? "var(--good)"
+                          : "var(--ink-faint)";
+                      const stateLabel = isDisburse
+                        ? "Disbursed"
+                        : p.complete
+                          ? "Paid"
+                          : isOverdue
+                            ? "Overdue"
+                            : "Due";
                       return (
-                        <tr key={idx} style={isDisburse ? { background: "var(--rule-soft)" } : undefined}>
+                        <tr key={idx} style={rowBg ? { background: rowBg } : undefined}>
                           <td className="mono">{p.period ?? "—"}</td>
-                          <td className="mono">{fmtFineractArray(p.dueDate ?? p.fromDate)}</td>
+                          <td className="mono"
+                            style={isOverdue ? { color: "var(--bad)", fontWeight: 500 } : undefined}>
+                            {fmtFineractArray(p.dueDate ?? p.fromDate)}
+                          </td>
                           <td className="mono" style={{ textAlign: "right" }}>{fmt(p.principalDue)}</td>
                           <td className="mono" style={{ textAlign: "right", color: "var(--ink-soft)" }}>
                             {fmt(p.interestDue)}
@@ -224,9 +301,10 @@ export default function LoanDetailPage() {
                           </td>
                           <td className="mono" style={{
                             fontSize: 11,
-                            color: p.complete ? "var(--good)" : "var(--ink-faint)",
+                            color: stateColor,
+                            fontWeight: isOverdue ? 500 : 400,
                           }}>
-                            {isDisburse ? "Disbursed" : p.complete ? "Paid" : "Due"}
+                            {stateLabel}
                           </td>
                         </tr>
                       );
@@ -285,23 +363,40 @@ export default function LoanDetailPage() {
           onSuccess={() => { setDialog(null); reload(); }}
         />
       )}
+
+      {dialog === "writeoff" && loan && (
+        <ActionDialog
+          title="Write off loan"
+          loanId={String(loan.id)}
+          command="writeoff"
+          fields={[
+            { key: "transactionDate", label: "Write-off date", type: "date", default: todayIso() },
+            { key: "writeoffReasonId", label: "Reason ID (optional)", type: "text", default: "" },
+            { key: "note", label: "Note", type: "text", default: "Uncollectable — formal write-off" },
+          ]}
+          onClose={() => setDialog(null)}
+          onSuccess={() => { setDialog(null); reload(); }}
+        />
+      )}
     </AppShell>
   );
 }
 
-function Stat(p: { label: string; value: string; accent?: boolean }) {
+function Stat(p: { label: string; value: string; accent?: boolean; bad?: boolean }) {
+  const valueColor = p.bad ? "var(--bad)" : p.accent ? "var(--signal-hover)" : "var(--ink)";
+  const labelColor = p.bad ? "var(--bad)" : "var(--ink-faint)";
   return (
     <div style={{ background: "white", padding: "14px 16px" }}>
       <div style={{
         fontFamily: "var(--font-display)", fontSize: 10,
         letterSpacing: "0.12em", textTransform: "uppercase",
-        color: "var(--ink-faint)", marginBottom: 4,
+        color: labelColor, marginBottom: 4,
       }}>
         {p.label}
       </div>
       <div style={{
         fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 500,
-        color: p.accent ? "var(--signal-hover)" : "var(--ink)",
+        color: valueColor,
       }}>
         {p.value}
       </div>
@@ -356,9 +451,16 @@ function ActionDialog(p: {
         ...p.extraBody,
       };
       for (const f of p.fields) {
-        if (f.type === "date") body[f.key] = toFineractDate(values[f.key]);
-        else if (f.type === "number") body[f.key] = Number(values[f.key]);
-        else body[f.key] = values[f.key];
+        const raw = values[f.key];
+        if (f.type === "date") {
+          body[f.key] = toFineractDate(raw);
+        } else if (f.type === "number") {
+          body[f.key] = Number(raw);
+        } else {
+          // Skip empty text fields rather than sending "" which some
+          // Fineract endpoints reject as a parse error.
+          if (raw && raw.trim() !== "") body[f.key] = raw;
+        }
       }
       const path = p.path ?? `/loans/${p.loanId}?command=${p.command}`;
       await fineract({ method: "POST", path, body });
