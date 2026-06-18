@@ -1,9 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { fineract, formatError } from "@/lib/fineract";
+
+type GLAccount = {
+  id: number;
+  name: string;
+  glCode: string;
+  type?: { id?: number; value?: string };
+};
+
+const TYPE_ASSET = 1;
+const TYPE_LIABILITY = 2;
+const TYPE_INCOME = 4;
+const TYPE_EXPENSE = 5;
 
 type Form = {
   name: string;
@@ -19,6 +31,13 @@ type Form = {
   minRequiredOpeningBalance: number | null;
   withdrawalFeeForTransfers: boolean;
   allowOverdraft: boolean;
+
+  // Accounting
+  accountingRule: number;                     // 1=None, 2=Cash
+  savingsControlAccountId: number | null;     // Liability — customer deposits
+  savingsReferenceAccountId: number | null;   // Asset — cash backing the deposits
+  interestOnSavingsAccountId: number | null;  // Expense — interest paid
+  incomeFromFeeAccountId: number | null;      // Income — savings fees
 };
 
 const initial: Form = {
@@ -35,9 +54,13 @@ const initial: Form = {
   minRequiredOpeningBalance: null,
   withdrawalFeeForTransfers: false,
   allowOverdraft: false,
+  // Accounting defaults
+  accountingRule: 1,                       // 1 = None
+  savingsControlAccountId: null,
+  savingsReferenceAccountId: null,
+  interestOnSavingsAccountId: null,
+  incomeFromFeeAccountId: null,
 };
-
-const ACCOUNTING_RULE_NONE = 1;
 
 export default function NewSavingsProductPage() {
   const router = useRouter();
@@ -45,6 +68,25 @@ export default function NewSavingsProductPage() {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<{ resourceId: number } | null>(null);
   const [err, setErr] = useState<{ title: string; detail: string; raw?: string } | null>(null);
+  const [glAccounts, setGlAccounts] = useState<GLAccount[]>([]);
+
+  // Load GL accounts for the accounting section dropdowns.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await fineract<GLAccount[]>({ method: "GET", path: "/glaccounts" });
+        if (!cancelled) setGlAccounts(Array.isArray(data) ? data : []);
+      } catch {
+        // Non-fatal — user can still create with accounting=None
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  function accountsOfType(typeIds: number[]): GLAccount[] {
+    return glAccounts.filter((a) => typeIds.includes(a.type?.id ?? 0));
+  }
 
   function update<K extends keyof Form>(k: K, v: Form[K]) {
     setF((prev) => ({ ...prev, [k]: v }));
@@ -61,7 +103,7 @@ export default function NewSavingsProductPage() {
       interestPostingPeriodType: f.interestPostingPeriodType,
       interestCalculationType: f.interestCalculationType,
       interestCalculationDaysInYearType: f.interestCalculationDaysInYearType,
-      accountingRule: ACCOUNTING_RULE_NONE,
+      accountingRule: f.accountingRule,
       locale: "en",
     };
     if (f.description.trim()) body.description = f.description.trim();
@@ -70,6 +112,20 @@ export default function NewSavingsProductPage() {
     }
     if (f.withdrawalFeeForTransfers) body.withdrawalFeeForTransfers = true;
     if (f.allowOverdraft) body.allowOverdraft = true;
+
+    // GL account mappings — only sent for Cash accounting (rule 2).
+    if (f.accountingRule === 2) {
+      const mappings = {
+        savingsControlAccountId: f.savingsControlAccountId,
+        savingsReferenceAccountId: f.savingsReferenceAccountId,
+        interestOnSavingsAccountId: f.interestOnSavingsAccountId,
+        incomeFromFeeAccountId: f.incomeFromFeeAccountId,
+      };
+      for (const [key, val] of Object.entries(mappings)) {
+        if (val !== null && val !== undefined) body[key] = val;
+      }
+    }
+
     return body;
   }
 
@@ -223,17 +279,50 @@ export default function NewSavingsProductPage() {
               value={f.allowOverdraft ? "true" : "false"}
               onChange={(v) => update("allowOverdraft", v === "true")}
               options={[ ["false", "No"], ["true", "Yes"] ]} />
-            <div className="field">
-              <label className="field-label">
-                Accounting
-                <span className="field-label-code">accountingRule</span>
-              </label>
-              <input value="None (no GL mapping)" disabled
-                style={{ background: "var(--rule-soft)", color: "var(--ink-soft)", cursor: "not-allowed" }} />
-              <div className="field-hint">Sandbox uses None — GL configuration is a separate workstream.</div>
-            </div>
+            <Sel label="Accounting" code="accountingRule"
+              value={String(f.accountingRule)}
+              onChange={(v) => update("accountingRule", Number(v))}
+              options={[
+                ["1", "None (no GL postings)"],
+                ["2", "Cash (real-time GL postings)"],
+              ]}
+              hint={f.accountingRule === 1
+                ? "Transactions don't post to general ledger."
+                : "Transactions post to GL accounts mapped below."} />
           </div>
         </section>
+
+        {/* === GL account mappings — only when accounting != None === */}
+        {f.accountingRule === 2 && (
+          <section className="field-group">
+            <div>
+              <div className="field-group-title">GL account mappings</div>
+              <div className="field-group-hint">
+                Cash accounting — required mappings. {glAccounts.length > 0
+                  ? "Pick from your chart of accounts."
+                  : "No GL accounts found. Create them first under Accounting → Chart of accounts."}
+              </div>
+            </div>
+            <div className="field-grid">
+              <GLAccountField label="Savings control" code="savingsControlAccountId"
+                value={f.savingsControlAccountId} onChange={(v) => update("savingsControlAccountId", v)}
+                accounts={accountsOfType([TYPE_LIABILITY])}
+                hint="Liability. Customer deposits balance." />
+              <GLAccountField label="Savings reference" code="savingsReferenceAccountId"
+                value={f.savingsReferenceAccountId} onChange={(v) => update("savingsReferenceAccountId", v)}
+                accounts={accountsOfType([TYPE_ASSET])}
+                hint="Asset. Cash backing the deposits." />
+              <GLAccountField label="Interest on savings" code="interestOnSavingsAccountId"
+                value={f.interestOnSavingsAccountId} onChange={(v) => update("interestOnSavingsAccountId", v)}
+                accounts={accountsOfType([TYPE_EXPENSE])}
+                hint="Expense. Interest paid to customers." />
+              <GLAccountField label="Income from fees" code="incomeFromFeeAccountId"
+                value={f.incomeFromFeeAccountId} onChange={(v) => update("incomeFromFeeAccountId", v)}
+                accounts={accountsOfType([TYPE_INCOME])}
+                hint="Income. Fees on savings accounts." />
+            </div>
+          </section>
+        )}
 
         <div className="actions">
           <button type="submit" className="btn btn-primary" disabled={submitting}>
@@ -316,6 +405,39 @@ function Sel(p: {
       </label>
       <select value={p.value} onChange={(e) => p.onChange(e.target.value)}>
         {p.options.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+      </select>
+      {p.hint && <div className="field-hint">{p.hint}</div>}
+    </div>
+  );
+}
+
+function GLAccountField(p: {
+  label: string;
+  code: string;
+  value: number | null;
+  onChange: (v: number | null) => void;
+  accounts: GLAccount[];
+  hint?: string;
+}) {
+  return (
+    <div className="field">
+      <label className="field-label">
+        {p.label}<span className="field-label-code">{p.code}</span>
+      </label>
+      <select
+        value={p.value ?? ""}
+        onChange={(e) => {
+          const v = e.target.value;
+          p.onChange(v === "" ? null : Number(v));
+        }}
+        required
+      >
+        <option value="">— Pick an account —</option>
+        {p.accounts.map((a) => (
+          <option key={a.id} value={String(a.id)}>
+            {a.glCode} · {a.name}
+          </option>
+        ))}
       </select>
       {p.hint && <div className="field-hint">{p.hint}</div>}
     </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { fineract, formatError } from "@/lib/fineract";
@@ -55,6 +55,19 @@ type Form = {
   multiDisburseLoan: boolean;
   maxTrancheCount: number | null;
   outstandingLoanBalance: number | null;
+
+  // Accounting (None = 1, Cash = 2, Accrual-periodic = 3, Accrual-upfront = 4)
+  accountingRule: number;
+  // GL account mappings used when accountingRule != 1 (None)
+  fundSourceAccountId: number | null;
+  loanPortfolioAccountId: number | null;
+  transfersInSuspenseAccountId: number | null;
+  interestOnLoanAccountId: number | null;
+  incomeFromFeeAccountId: number | null;
+  incomeFromPenaltyAccountId: number | null;
+  incomeFromRecoveryAccountId: number | null;
+  writeOffAccountId: number | null;
+  overpaymentLiabilityAccountId: number | null;
 };
 
 const initial: Form = {
@@ -101,11 +114,31 @@ const initial: Form = {
   multiDisburseLoan: false,
   maxTrancheCount: null,
   outstandingLoanBalance: null,
+
+  accountingRule: 1,                       // 1 = None
+  fundSourceAccountId: null,
+  loanPortfolioAccountId: null,
+  transfersInSuspenseAccountId: null,
+  interestOnLoanAccountId: null,
+  incomeFromFeeAccountId: null,
+  incomeFromPenaltyAccountId: null,
+  incomeFromRecoveryAccountId: null,
+  writeOffAccountId: null,
+  overpaymentLiabilityAccountId: null,
 };
 
-// accountingRule = 1 (None) is forced; Cash/Accrual modes need GL mapping
-// from a chart of accounts that isn't configured in this sandbox.
-const ACCOUNTING_RULE_NONE = 1;
+// GL account types (Fineract enum codes for type filtering)
+const TYPE_ASSET = 1;
+const TYPE_LIABILITY = 2;
+const TYPE_INCOME = 4;
+const TYPE_EXPENSE = 5;
+
+type GLAccount = {
+  id: number;
+  name: string;
+  glCode: string;
+  type?: { id?: number; value?: string };
+};
 
 export default function NewLoanProductPage() {
   const router = useRouter();
@@ -114,6 +147,26 @@ export default function NewLoanProductPage() {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<{ resourceId: number } | null>(null);
   const [err, setErr] = useState<{ title: string; detail: string; raw?: string } | null>(null);
+  const [glAccounts, setGlAccounts] = useState<GLAccount[]>([]);
+
+  // Load GL accounts for the accounting section dropdowns.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await fineract<GLAccount[]>({ method: "GET", path: "/glaccounts" });
+        if (!cancelled) setGlAccounts(Array.isArray(data) ? data : []);
+      } catch {
+        // Non-fatal — user can still create with accounting=None
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Helpers for filtering GL accounts to ones of a given type, used by selects
+  function accountsOfType(typeIds: number[]): GLAccount[] {
+    return glAccounts.filter((a) => typeIds.includes(a.type?.id ?? 0));
+  }
 
   function update<K extends keyof Form>(k: K, v: Form[K]) {
     setF((prev) => ({ ...prev, [k]: v }));
@@ -144,10 +197,29 @@ export default function NewLoanProductPage() {
       transactionProcessingStrategyCode: f.transactionProcessingStrategyCode,
       daysInYearType: f.daysInYearType,
       daysInMonthType: f.daysInMonthType,
-      accountingRule: ACCOUNTING_RULE_NONE,
+      accountingRule: f.accountingRule,
       locale: "en",
       dateFormat: "dd MMMM yyyy",
     };
+
+    // GL account mappings — only sent for Cash accounting (rule 2).
+    // Required fields per Fineract for Cash mode on a loan product.
+    if (f.accountingRule === 2) {
+      const mappings = {
+        fundSourceAccountId: f.fundSourceAccountId,
+        loanPortfolioAccountId: f.loanPortfolioAccountId,
+        transfersInSuspenseAccountId: f.transfersInSuspenseAccountId,
+        interestOnLoanAccountId: f.interestOnLoanAccountId,
+        incomeFromFeeAccountId: f.incomeFromFeeAccountId,
+        incomeFromPenaltyAccountId: f.incomeFromPenaltyAccountId,
+        incomeFromRecoveryAccountId: f.incomeFromRecoveryAccountId,
+        writeOffAccountId: f.writeOffAccountId,
+        overpaymentLiabilityAccountId: f.overpaymentLiabilityAccountId,
+      };
+      for (const [key, val] of Object.entries(mappings)) {
+        if (val !== null && val !== undefined) body[key] = val;
+      }
+    }
 
     // Optional strings — only include if non-empty
     if (f.description.trim()) body.description = f.description.trim();
@@ -424,17 +496,16 @@ export default function NewLoanProductPage() {
                 ["early-repayment-strategy", "Early repayment"],
               ]} />
 
-            <div className="field">
-              <label className="field-label">
-                Accounting
-                <span className="field-label-code">accountingRule</span>
-              </label>
-              <input value="None (no GL mapping)" disabled
-                style={{ background: "var(--rule-soft)", color: "var(--ink-soft)", cursor: "not-allowed" }} />
-              <div className="field-hint">
-                Cash / Accrual modes require ~12 chart-of-accounts mappings. Sandbox uses None.
-              </div>
-            </div>
+            <SelectField label="Accounting" code="accountingRule"
+              value={f.accountingRule}
+              onChange={(v) => update("accountingRule", v)}
+              options={[
+                [1, "None (no GL postings)"],
+                [2, "Cash (real-time GL postings)"],
+              ]}
+              hint={f.accountingRule === 1
+                ? "Transactions don't post to general ledger."
+                : "Transactions post to GL accounts mapped below."} />
 
             <SelectField label="Days in year" code="daysInYearType" value={f.daysInYearType}
               onChange={(v) => update("daysInYearType", v)}
@@ -484,6 +555,58 @@ export default function NewLoanProductPage() {
             </div>
           )}
         </section>
+
+        {/* === GL account mappings — only when accounting != None === */}
+        {f.accountingRule === 2 && (
+          <section className="field-group">
+            <div>
+              <div className="field-group-title">GL account mappings</div>
+              <div className="field-group-hint">
+                Cash accounting — required mappings. {glAccounts.length > 0
+                  ? "Pick from your chart of accounts."
+                  : "No GL accounts found. Create them first under Accounting → Chart of accounts."}
+              </div>
+            </div>
+            <div className="field-grid">
+              <GLAccountField label="Fund source" code="fundSourceAccountId"
+                value={f.fundSourceAccountId} onChange={(v) => update("fundSourceAccountId", v)}
+                accounts={accountsOfType([TYPE_ASSET])}
+                hint="Asset. Cash account funds get disbursed from." />
+              <GLAccountField label="Loan portfolio" code="loanPortfolioAccountId"
+                value={f.loanPortfolioAccountId} onChange={(v) => update("loanPortfolioAccountId", v)}
+                accounts={accountsOfType([TYPE_ASSET])}
+                hint="Asset. Where outstanding principal sits." />
+              <GLAccountField label="Transfers in suspense" code="transfersInSuspenseAccountId"
+                value={f.transfersInSuspenseAccountId} onChange={(v) => update("transfersInSuspenseAccountId", v)}
+                accounts={accountsOfType([TYPE_LIABILITY])}
+                hint="Liability. Suspense for in-flight transfers." />
+              <GLAccountField label="Interest on loan" code="interestOnLoanAccountId"
+                value={f.interestOnLoanAccountId} onChange={(v) => update("interestOnLoanAccountId", v)}
+                accounts={accountsOfType([TYPE_INCOME])}
+                hint="Income. Interest income earned." />
+              <GLAccountField label="Income from fees" code="incomeFromFeeAccountId"
+                value={f.incomeFromFeeAccountId} onChange={(v) => update("incomeFromFeeAccountId", v)}
+                accounts={accountsOfType([TYPE_INCOME])}
+                hint="Income. Fee income." />
+              <GLAccountField label="Income from penalty" code="incomeFromPenaltyAccountId"
+                value={f.incomeFromPenaltyAccountId} onChange={(v) => update("incomeFromPenaltyAccountId", v)}
+                accounts={accountsOfType([TYPE_INCOME])}
+                hint="Income. Penalty income." />
+              <GLAccountField label="Income from recovery" code="incomeFromRecoveryAccountId"
+                value={f.incomeFromRecoveryAccountId} onChange={(v) => update("incomeFromRecoveryAccountId", v)}
+                accounts={accountsOfType([TYPE_INCOME])}
+                hint="Income. Recoveries on written-off loans." />
+              <GLAccountField label="Write-off" code="writeOffAccountId"
+                value={f.writeOffAccountId} onChange={(v) => update("writeOffAccountId", v)}
+                accounts={accountsOfType([TYPE_EXPENSE])}
+                hint="Expense. Principal written off as uncollectable." />
+              <GLAccountField label="Overpayment liability" code="overpaymentLiabilityAccountId"
+                value={f.overpaymentLiabilityAccountId} onChange={(v) => update("overpaymentLiabilityAccountId", v)}
+                accounts={accountsOfType([TYPE_LIABILITY])}
+                hint="Liability. Customer overpayments." />
+            </div>
+          </section>
+        )}
 
         {/* === Advanced toggle === */}
         <section style={{
@@ -673,6 +796,40 @@ function SelectField<V extends string | number>(p: {
       >
         {p.options.map(([v, label]) => (
           <option key={String(v)} value={String(v)}>{label}</option>
+        ))}
+      </select>
+      {p.hint && <div className="field-hint">{p.hint}</div>}
+    </div>
+  );
+}
+
+function GLAccountField(p: {
+  label: string;
+  code: string;
+  value: number | null;
+  onChange: (v: number | null) => void;
+  accounts: GLAccount[];
+  hint?: string;
+}) {
+  return (
+    <div className="field">
+      <label className="field-label">
+        {p.label}
+        <span className="field-label-code">{p.code}</span>
+      </label>
+      <select
+        value={p.value ?? ""}
+        onChange={(e) => {
+          const v = e.target.value;
+          p.onChange(v === "" ? null : Number(v));
+        }}
+        required
+      >
+        <option value="">— Pick an account —</option>
+        {p.accounts.map((a) => (
+          <option key={a.id} value={String(a.id)}>
+            {a.glCode} · {a.name}
+          </option>
         ))}
       </select>
       {p.hint && <div className="field-hint">{p.hint}</div>}
