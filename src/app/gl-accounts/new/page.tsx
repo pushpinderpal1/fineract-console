@@ -47,7 +47,9 @@ const SEED: SeedAccount[] = [
 
   // Liabilities
   { glCode: "2001", name: "Customer deposits", type: TYPE_LIABILITY, description: "Customer savings balances payable" },
-  { glCode: "2101", name: "Suspense — transfers", type: TYPE_LIABILITY, description: "Funds awaiting allocation" },
+  // Assets (continued — Transfers in suspense is an asset because Fineract's
+  // transfersInSuspenseAccountId field validates for ASSET type)
+  { glCode: "1401", name: "Transfers in suspense", type: TYPE_ASSET, description: "Funds in transit awaiting allocation" },
   { glCode: "2201", name: "Overpayment liability", type: TYPE_LIABILITY, description: "Customer overpayments to refund" },
 
   // Income

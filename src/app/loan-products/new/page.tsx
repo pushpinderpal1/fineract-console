@@ -578,8 +578,8 @@ export default function NewLoanProductPage() {
                 hint="Asset. Where outstanding principal sits." />
               <GLAccountField label="Transfers in suspense" code="transfersInSuspenseAccountId"
                 value={f.transfersInSuspenseAccountId} onChange={(v) => update("transfersInSuspenseAccountId", v)}
-                accounts={accountsOfType([TYPE_LIABILITY])}
-                hint="Liability. Suspense for in-flight transfers." />
+                accounts={accountsOfType([TYPE_ASSET])}
+                hint="Asset. Suspense account for in-flight transfers." />
               <GLAccountField label="Interest on loan" code="interestOnLoanAccountId"
                 value={f.interestOnLoanAccountId} onChange={(v) => update("interestOnLoanAccountId", v)}
                 accounts={accountsOfType([TYPE_INCOME])}
